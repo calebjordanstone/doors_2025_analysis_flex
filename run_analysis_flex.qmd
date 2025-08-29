@@ -1,10 +1,17 @@
 ---
-title: "Honours Analysis 2025 - Flex"
+title: "Honours Analysis 2025 - Flexibility Experiment"
 format: html
+code-fold: true
+code-summary: "Show code"
 embed-resources: true
 editor: visual
 execute-dir: project
+execute: 
+  warning: false
+  message: false
 ---
+
+Load libraries and import data
 
 ```{r}
 #| output: false
@@ -19,11 +26,7 @@ library(stringr)
 
 # set emmeans option to multivariate
 afex_options(emmeans_model = "multivariate") # use multivariate for RM designs
-```
 
-# Flexibility experiment
-
-```{r}
 # assign experiment label
 exp <- 'flex'
 
@@ -31,6 +34,16 @@ exp <- 'flex'
 avg_flex <- fread('data/exp-flex_avg.csv')
 avg_flex_ss <- fread('data/exp-flex_avg-ss.csv')
 
+# change factor level names
+avg_flex[, switch := ifelse(switch==0, 'non-switch', 'switch')]
+avg_flex[, train_type := ifelse(train_type==1,'stable', 'variable')]
+avg_flex[, ses := ifelse(ses==2, 'training', 'testing')]
+
+# change factor level names
+avg_flex_ss[, subses := ifelse(subses==1, 'first', 'last')]
+avg_flex_ss[, switch := ifelse(switch==0, 'non-switch', 'switch')]
+avg_flex_ss[, train_type := ifelse(train_type==1,'stable', 'variable')]
+avg_flex_ss[, ses := ifelse(ses==2, 'training', 'testing')]
 ```
 
 ## Testing session
@@ -38,397 +51,292 @@ avg_flex_ss <- fread('data/exp-flex_avg-ss.csv')
 ```{r}
 # assign session label
 ses <- 'test'
+```
 
-# change factor level names
-avg_flex[, switch := ifelse(switch==0, 'non-switch', 'switch')]
-avg_flex[, train_type := ifelse(train_type==1,'stable', 'variable')]
-avg_flex[, ses := ifelse(ses==2, 'training', 'testing')]
+Define contrasts for analysis
 
+```{r}
 ## define contrasts for analysis
 # effect of switch at each level of train_type
 switch_vs_nonswitch <- list(stable = c(-1, 0, 1, 0),
                             variable = c(0, -1, 0, 1))
-# effect of train_type at each level of switch
+# effect of train_type at each level of switch, plus main effect of train_type
 stable_vs_variable <- list(nonswitch = c(1, -1, 0, 0),
                            switch = c(0, 0, 1, -1))
-#  interaction effect
+# interaction effect
 interaction <- list(interaction = c(0.5, -0.5, -0.5, 0.5))
-# main effect of train_type
-train_type <- list(train_type = c(-0.5, 0.5, -0.5, 0.5))
 
+list_of_contrast_lists <- list(interaction,
+                               switch_vs_nonswitch, 
+                               stable_vs_variable)
+```
+
+Write a function that automatically applies contrasts to a table of emms.
+
+```{r}
+# a function to rule them all
+get_all_contrasts <- function(this_dv, list_of_contrast_lists){
+  
+  # specify model
+  mdl <- aov_ez(id = 'sub',
+                within = 'switch', 
+                between = 'train_type',
+                dv = this_dv,
+                data = avg_flex[ses=='testing'])
+
+  # generate means
+  emm_int <- emmeans(mdl, c("train_type", "switch"))
+  
+    # plot 
+  p <- afex_plot(mdl, 
+          x = 'switch', 
+          trace = 'train_type', 
+          error = "none", 
+          data_plot = F) + 
+  theme_pubclean()
+  
+  # compute contrasts
+  c <- do.call(rbind, lapply(list_of_contrast_lists, function(x) summary(contrast(emm_int, x, adjust='bonferroni'))))
+  
+  # put result in data frame
+  dt <- data.table(c)
+  dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
+  ][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
+
+  # return output
+  return(list(means=emm_int, plot=p, contrasts=c, dt=dt)) #made this return some additional information for interpreting the results
+}
 ```
 
 ### Accuracy
 
 ```{r}
 # assign variable label
-var <- 'accuracy'
-
-# specify model
-mdl <- aov_ez(id = 'sub',
-              within = 'switch', 
-              between = 'train_type',
-              dv = 'accuracy_mean',
-              data = avg_flex[ses=='testing'])
-
-# get estimated marginal means from the model
-emm_int <- emmeans(mdl, c("train_type", "switch"))
-
-# inspect means
-emm_int
+var <- 'accuracy_mean'
 
 # compute contrasts
-(ci <- contrast(emm_int, interaction))
-(cw <- contrast(emm_int, switch_vs_nonswitch, adjust='bonferroni'))
-(cb <- contrast(emm_int, stable_vs_variable, adjust='bonferroni'))
+res <- get_all_contrasts(var, list_of_contrast_lists)
 
-# plot result
-afex_plot(mdl, 
-          x = 'switch', 
-          trace = 'train_type', 
-          error = "within", 
-          data_plot = F) + 
-  theme_pubclean()
+# show results
+res$contrasts
+res$plot
 
 # save result
-dt <- as.data.table(rbind(data.frame(ci), data.frame(cw), data.frame(cb)))
-dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
-][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
 fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
-write_csv(dt, fln)
+write_csv(res$dt, fln)
 ```
 
 ### Setting errors
 
 ```{r}
-var <- 'setting_errors'
-
-# specify model
-mdl <- aov_ez(id = 'sub',
-              within = 'switch', 
-              between = 'train_type',
-              dv = 'setting_errors_mean',
-              data = avg_flex[ses=='testing'])
-
-# get estimated marginal means from the model
-emm_int <- emmeans(mdl, c("train_type", "switch"))
-
-# inspect means
-emm_int
+# assign variable label
+var <- 'setting_errors_mean'
 
 # compute contrasts
-(ci <- contrast(emm_int, interaction))
-(cw <- contrast(emm_int, switch_vs_nonswitch, adjust='bonferroni'))
-(cb <- contrast(emm_int, stable_vs_variable, adjust='bonferroni'))
+res <- get_all_contrasts(var, list_of_contrast_lists)
 
-# plot result
-afex_plot(mdl, 
-          x = 'switch', 
-          trace = 'train_type', 
-          error = "within", 
-          data_plot = F) + 
-  theme_pubclean()
+# show results
+res$contrasts
+res$plot
 
 # save result
-dt <- as.data.table(rbind(data.frame(ci), data.frame(cw), data.frame(cb)))
-dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
-][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
 fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
-write_csv(dt, fln)
+write_csv(res$dt, fln)
 ```
 
 ### General errors
 
 ```{r}
-var <- 'general_errors'
-
-# specify model
-mdl <- aov_ez(id = 'sub',
-              within = 'switch', 
-              between = 'train_type',
-              dv = 'general_errors_mean',
-              data = avg_flex[ses=='testing'])
-
-# get estimated marginal means from the model
-emm_int <- emmeans(mdl, c("train_type", "switch"))
-
-# inspect means
-emm_int
+# assign variable label
+var <- 'general_errors_mean'
 
 # compute contrasts
-(ci <- contrast(emm_int, interaction))
-(cw <- contrast(emm_int, switch_vs_nonswitch, adjust='bonferroni'))
-(cb <- contrast(emm_int, stable_vs_variable, adjust='bonferroni'))
+res <- get_all_contrasts(var, list_of_contrast_lists)
 
-# plot result
-afex_plot(mdl, 
-          x = 'switch', 
-          trace = 'train_type', 
-          error = "within", 
-          data_plot = F) + 
-  theme_pubclean()
+# show results
+res$contrasts
+res$plot
 
 # save result
-dt <- as.data.table(rbind(data.frame(ci), data.frame(cw), data.frame(cb)))
-dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
-][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
 fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
-write_csv(dt, fln)
+write_csv(res$dt, fln)
 ```
 
 ### RT first correct
 
 ```{r}
-var <- 'rt_first_cor'
-
-# specify model
-mdl <- aov_ez(id = 'sub',
-              within = 'switch', 
-              between = 'train_type',
-              dv = 'rt_first_correct_mean',
-              data = avg_flex[ses=='testing'])
-
-# get estimated marginal means from the model
-emm_int <- emmeans(mdl, c("train_type", "switch"))
-
-# inspect means
-emm_int
+# assign variable label
+var <- 'rt_first_correct_mean'
 
 # compute contrasts
-(ci <- contrast(emm_int, interaction))
-(cw <- contrast(emm_int, switch_vs_nonswitch, adjust='bonferroni'))
-(cb <- contrast(emm_int, stable_vs_variable, adjust='bonferroni'))
+res <- get_all_contrasts(var, list_of_contrast_lists)
 
-# plot result
-afex_plot(mdl, 
-          x = 'switch', 
-          trace = 'train_type', 
-          error = "within", 
-          data_plot = F) + 
-  theme_pubclean()
+# show results
+res$contrasts
+res$plot
 
 # save result
-dt <- as.data.table(rbind(data.frame(ci), data.frame(cw), data.frame(cb)))
-dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
-][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
 fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
-write_csv(dt, fln)
+write_csv(res$dt, fln)
+```
+### LISAS - First correct
+
+```{r}
+# assign variable label
+var <- 'LISAS_rt_fst_cor'
+
+# compute contrasts
+res <- get_all_contrasts(var, list_of_contrast_lists)
+
+# show results
+res$contrasts
+res$plot
+
+# save result
+fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
+write_csv(res$dt, fln)
 ```
 
 ### RT subs correct
 
+Add main effect contrasts for RT subs correct variables
 ```{r}
-var <- 'rt_subs_cor'
-
-# specify model
-mdl <- aov_ez(id = 'sub',
-              within = 'switch', 
-              between = 'train_type',
-              dv = 'rt_subs_correct_mean',
-              data = avg_flex[ses=='testing'])
-
-# get estimated marginal means from the model
-emm_int <- emmeans(mdl, c("train_type", "switch"))
-
-# inspect means
-emm_int
-
+# add main effect contrasts and redefine list of contrasts
+stable_vs_variable <- list(nonswitch = c(1, -1, 0, 0),
+                           switch = c(0, 0, 1, -1),
+                           main = c(-0.5, 0.5, -0.5, 0.5))
+list_of_contrast_lists <- list(interaction,
+                               switch_vs_nonswitch, 
+                               stable_vs_variable)
 # compute contrasts
-(ci <- contrast(emm_int, interaction))
-(cw <- contrast(emm_int, switch_vs_nonswitch, adjust='bonferroni'))
-(cb <- contrast(emm_int, c(train_type, stable_vs_variable), adjust='bonferroni'))
-
-# plot result
-afex_plot(mdl, 
-          x = 'switch', 
-          trace = 'train_type', 
-          error = "within", 
-          data_plot = F) + 
-  theme_pubclean()
-
-# save result
-dt <- as.data.table(rbind(data.frame(ci), data.frame(cw), data.frame(cb)))
-dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
-][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
-fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
-write_csv(dt, fln)
 ```
 
-### LISAS - First correct
-
 ```{r}
-var <- 'LISAS_first_cor'
+# assign variable label
+var <- 'rt_subs_correct_mean'
 
-# specify model
-mdl <- aov_ez(id = 'sub',
-              within = 'switch', 
-              between = 'train_type',
-              dv = 'LISAS_rt_fst_cor',
-              data = avg_flex[ses=='testing'])
+res <- get_all_contrasts(var, list_of_contrast_lists)
 
-# get estimated marginal means from the model
-emm_int <- emmeans(mdl, c("train_type", "switch"))
-
-# inspect means
-emm_int
-
-# compute contrasts
-(ci <- contrast(emm_int, interaction))
-(cw <- contrast(emm_int, switch_vs_nonswitch, adjust='bonferroni'))
-(cb <- contrast(emm_int, stable_vs_variable, adjust='bonferroni'))
-
-# plot result
-afex_plot(mdl, 
-          x = 'switch', 
-          trace = 'train_type', 
-          error = "within", 
-          data_plot = F) + 
-  theme_pubclean()
+# show results
+res$contrasts
+res$plot
 
 # save result
-dt <- as.data.table(rbind(data.frame(ci), data.frame(cw), data.frame(cb)))
-dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
-][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
 fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
-write_csv(dt, fln)
-
+write_csv(res$dt, fln)
 ```
 
 ### LISAS - Subs correct
 
 ```{r}
-var <- 'LISAS_subs_cor'
-
-# specify model
-mdl <- aov_ez(id = 'sub',
-              within = 'switch', 
-              between = 'train_type',
-              dv = 'LISAS_rt_sub_cor',
-              data = avg_flex[ses=='testing'])
-
-# get estimated marginal means from the model
-emm_int <- emmeans(mdl, c("train_type", "switch"))
-
-# inspect means
-emm_int
+# assign variable label
+var <- 'LISAS_rt_sub_cor'
 
 # compute contrasts
-(ci <- contrast(emm_int, interaction))
-(cw <- contrast(emm_int, switch_vs_nonswitch, adjust='bonferroni'))
-(cb <- contrast(emm_int, stable_vs_variable, adjust='bonferroni'))
+res <- get_all_contrasts(var, list_of_contrast_lists)
 
-# plot result
-afex_plot(mdl, 
-          x = 'switch', 
-          trace = 'train_type', 
-          error = "within", 
-          data_plot = F) + 
-  theme_pubclean()
+# show results
+res$contrasts
+res$plot
 
 # save result
-dt <- as.data.table(rbind(data.frame(ci), data.frame(cw), data.frame(cb)))
-dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
-][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
 fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
-write_csv(dt, fln)
-
+write_csv(res$dt, fln)
 ```
 
 ## Training session
 
 ```{r}
 ses <- 'train'
+```
 
-# change factor level names
-avg_flex_ss[, subses := ifelse(subses==1, 'first', 'last')]
-avg_flex_ss[, switch := ifelse(switch==0, 'non-switch', 'switch')]
-avg_flex_ss[, train_type := ifelse(train_type==1,'stable', 'variable')]
-avg_flex_ss[, ses := ifelse(ses==2, 'training', 'testing')]
+Define contrasts for analysis
 
-## define contrasts for analysis
+```{r}
 # look at effect of sub_ses at each level of train_type
 first_vs_last <- list(stable = c(-1, 0, 1, 0),
                       variable = c(0, -1, 0, 1))
 # look at effect of train_type at each level of sub_ses
 stable_vs_variable <- list(first = c(1, -1, 0, 0),
                            last = c(0, 0, 1, -1))
+# interaction effect
+interaction <- list(interaction = c(0.5, -0.5, -0.5, 0.5))
 
+# combine
+list_of_contrast_lists <- list(interaction,
+                               first_vs_last, 
+                               stable_vs_variable)
+```
+
+Edit the contrast function.
+
+```{r}
+# a function to rule them all
+get_all_contrasts <- function(this_dv, list_of_contrast_lists){
+  
+  # specify model
+  mdl <- aov_ez(id = 'sub',
+              within = 'subses', 
+              between = 'train_type',
+              dv = this_dv,
+              data = avg_flex_ss[ses=='training' & switch=='non-switch'])
+
+  # generate means
+  emm_int <- emmeans(mdl, c("train_type", "subses"))
+  
+    # plot 
+  p <- afex_plot(mdl, 
+          x = 'subses', 
+          trace = 'train_type', 
+          error = 'none', 
+          data_plot = F) + 
+  theme_pubclean()
+  
+  # compute contrasts
+  c <- do.call(rbind, lapply(list_of_contrast_lists, function(x) summary(contrast(emm_int, x, adjust='bonferroni'))))
+  
+  # put result in data frame
+  dt <- data.table(c)
+  dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
+  ][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
+
+  # return output
+  return(list(means=emm_int, plot=p, contrasts=c, dt=dt))
+}
 ```
 
 ### Setting errors
 
 ```{r}
-var <- 'setting_errors'
-
-# specify model
-mdl <- aov_ez(id = 'sub',
-              within = 'subses', 
-              between = 'train_type',
-              dv = 'setting_errors_mean',
-              data = avg_flex_ss[ses=='training' & switch=='non-switch'])
-
-# get estimated marginal means from the model
-emm_int <- emmeans(mdl, c("train_type", "subses"))
-
-# inspect means
-emm_int
+# assign variable label
+var <- 'setting_errors_mean'
 
 # compute contrasts
-(ci <- contrast(emm_int, interaction))
-(cw <- contrast(emm_int, first_vs_last, adjust='bonferroni'))
-(cb <- contrast(emm_int, stable_vs_variable, adjust='bonferroni'))
+res <- get_all_contrasts(var, list_of_contrast_lists)
 
-# plot result
-afex_plot(mdl, 
-          x = 'subses', 
-          trace = 'train_type', 
-          error = "within", 
-          data_plot = F) + 
-  theme_pubclean()
+# show results
+res$contrasts
+res$plot
 
 # save result
-dt <- as.data.table(rbind(data.frame(ci), data.frame(cw), data.frame(cb)))
-dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
-][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
 fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
-write_csv(dt, fln)
+write_csv(res$dt, fln)
 ```
 
 ### General errors
 
 ```{r}
-var <- 'general_errors'
-
-# specify model
-mdl <- aov_ez(id = 'sub',
-              within = 'subses', 
-              between = 'train_type',
-              dv = 'general_errors_mean',
-              data = avg_flex_ss[ses=='training' & switch=='non-switch'])
-
-# get estimated marginal means from the model
-emm_int <- emmeans(mdl, c("train_type", "subses"))
-
-# inspect means
-emm_int
+# assign variable label
+var <- 'general_errors_mean'
 
 # compute contrasts
-(ci <- contrast(emm_int, interaction))
-(cw <- contrast(emm_int, first_vs_last, adjust='bonferroni'))
-(cb <- contrast(emm_int, stable_vs_variable, adjust='bonferroni'))
+res <- get_all_contrasts(var, list_of_contrast_lists)
 
-# plot result
-afex_plot(mdl, 
-          x = 'subses', 
-          trace = 'train_type', 
-          error = "within", 
-          data_plot = F) + 
-  theme_pubclean()
+# show results
+res$contrasts
+res$plot
 
 # save result
-dt <- as.data.table(rbind(data.frame(ci), data.frame(cw), data.frame(cb)))
-dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
-][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
 fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
-write_csv(dt, fln)
+write_csv(res$dt, fln)
 ```
