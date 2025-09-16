@@ -1,6 +1,10 @@
 ---
 title: "Honours Analysis 2025 - Flexibility Experiment"
 format: html
+toc: true
+toc-title: Contents
+toc-location: left
+toc-expand: true
 code-fold: true
 code-summary: "Show code"
 embed-resources: true
@@ -11,10 +15,27 @@ execute:
   message: false
 ---
 
-Load libraries and import data
+Load libraries, import data, and other housekeeping.
 
 ```{r}
 #| output: false
+
+# File path diagram
+"
+.
+└── R_project/
+    ├── data/
+    │   └── ... datafiles go here
+    ├── res/
+    │   └── ... output goes here
+    └── run_analysis_flex_.qmd
+"
+
+# set output path
+project_path <- getwd()
+if (!dir.exists(file.path(project_path, "res"))) {
+  dir.create(file.path(project_path, "res"))
+}
 
 # load libraries
 library(afex)
@@ -48,27 +69,40 @@ avg_flex_ss[, ses := ifelse(ses==2, 'training', 'testing')]
 
 ## Testing session
 
-```{r}
-# assign session label
-ses <- 'test'
-```
-
 Define contrasts for analysis
 
 ```{r}
-## define contrasts for analysis
-# effect of switch at each level of train_type
-switch_vs_nonswitch <- list(stable = c(-1, 0, 1, 0),
-                            variable = c(0, -1, 0, 1))
-# effect of train_type at each level of switch, plus main effect of train_type
-stable_vs_variable <- list(nonswitch = c(1, -1, 0, 0),
-                           switch = c(0, 0, 1, -1))
-# interaction effect
-interaction <- list(interaction = c(0.5, -0.5, -0.5, 0.5))
+#| output: false
 
-list_of_contrast_lists <- list(interaction,
-                               switch_vs_nonswitch, 
-                               stable_vs_variable)
+# assign session label
+ses <- 'test'
+
+## define contrasts for analysis
+switch_vs_nonswitch_at_stable <- c(-1, 0, 1, 0)
+switch_vs_nonswitch_at_variable <- c(0, -1, 0, 1)
+stable_vs_variable_at_switch <- c(0, 0, 1, -1)
+stable_vs_variable_at_nonswitch <- c(-1, 1, 0, 0)
+interaction <- c(0.5, -0.5, -0.5, 0.5)
+
+# now we have our key contrasts, we can check if they are orthogonal.
+n_contrasts <- 5
+all_contrasts <- matrix(c(switch_vs_nonswitch_at_stable, 
+                          switch_vs_nonswitch_at_variable, 
+                          stable_vs_variable_at_switch, 
+                          stable_vs_variable_at_nonswitch, 
+                          interaction), 
+                        byrow=FALSE, 
+                        ncol=n_contrasts)
+G <- t(all_contrasts) %*% all_contrasts
+G # look at G: can't separate them, all need to be in 1 big family
+
+fam_test <- list(switch_vs_nonswitch_at_stable = switch_vs_nonswitch_at_stable, # 1
+                 switch_vs_nonswitch_at_variable = switch_vs_nonswitch_at_variable, # 2
+                 stable_vs_variable_at_switch = stable_vs_variable_at_switch, # 3
+                 stable_vs_variable_at_nonswitch = stable_vs_variable_at_nonswitch, # 4
+                 interaction = interaction) # 5
+
+list_of_contrast_lists <- list(fam_test)
 ```
 
 Write a function that automatically applies contrasts to a table of emms.
@@ -179,6 +213,7 @@ res$plot
 fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
 write_csv(res$dt, fln)
 ```
+
 ### LISAS - First correct
 
 ```{r}
@@ -198,18 +233,6 @@ write_csv(res$dt, fln)
 ```
 
 ### RT subs correct
-
-Add main effect contrasts for RT subs correct variables
-```{r}
-# add main effect contrasts and redefine list of contrasts
-stable_vs_variable <- list(nonswitch = c(1, -1, 0, 0),
-                           switch = c(0, 0, 1, -1),
-                           main = c(-0.5, 0.5, -0.5, 0.5))
-list_of_contrast_lists <- list(interaction,
-                               switch_vs_nonswitch, 
-                               stable_vs_variable)
-# compute contrasts
-```
 
 ```{r}
 # assign variable label
@@ -244,28 +267,155 @@ fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
 write_csv(res$dt, fln)
 ```
 
-## Training session
+### 3-way interaction for LISAS
+
+Create contrasts.
 
 ```{r}
-ses <- 'train'
+#| output: false
+
+## wrangle data table
+avg_flex_melt <- melt(avg_flex[ses=='testing',], 
+                      id.vars=c('sub', 
+                                'switch', 
+                                'train_type'),
+                      measure.vars=c('LISAS_rt_fst_cor', 
+                                     'LISAS_rt_sub_cor'),
+                      variable.name='LISAS_var',
+                      value.name='LISAS_all_cor_mean')
+
+## define contrasts for analysis
+switch <- list(
+  nonswitch = rep(c(1, 1, 0, 0), times=2),
+  int = rep(c(1, 1, -1, -1), times = 2)
+)
+train_type = list(
+  int = rep(c(1, -1), times=4)
+)
+response = list( 
+  int = rep(c(1, -1), each = 4)
+)
+
+# 1) are RTs difference between first and subsequent responses for non-switch trials
+fst_v_sub_at_nonswitch <- response$int*switch$nonswitch
+
+# 2) does this differ on switch trials
+fst_v_sub_by_switch <- response$int*switch$int
+
+# 3) is there an interaction with group
+fst_v_sub_by_switch_by_grp <- fst_v_sub_by_switch*train_type$int
+
+# now we have our key contrasts, we can check if they are orthogonal.
+n_contrasts <- 3
+all_contrasts <- matrix(c(fst_v_sub_at_nonswitch, 
+                          fst_v_sub_by_switch, 
+                          fst_v_sub_by_switch_by_grp), 
+                        byrow=FALSE, 
+                        ncol=n_contrasts)
+G <- t(all_contrasts) %*% all_contrasts
+G # look at G: 1 & 2 are non-orthogonal
+
+fam_fst_v_sub <- list(fst_v_sub_at_nonswitch = fst_v_sub_at_nonswitch, # 1
+                      fst_v_sub_by_switch = fst_v_sub_by_switch) #2
+
+fam_fst_v_sub_by_grp <- list(fst_v_sub_by_switch_by_grp = fst_v_sub_by_switch_by_grp) # 3
+
+
+list_of_contrast_lists <- list(fam_fst_v_sub,
+                               fam_fst_v_sub_by_grp)
 ```
+Edit contrasts function.
+
+```{r}
+# a function to rule them all
+get_all_contrasts <- function(this_dv, list_of_contrast_lists){
+  
+  # specify model
+  mdl <- aov_ez(id = 'sub',
+                within = c('switch', 'LISAS_var'), 
+                between = 'train_type',
+                dv = this_dv,
+                data = avg_flex_melt)
+
+  # generate means
+  emm_int <- emmeans(mdl, c("train_type", "switch", "LISAS_var"))
+  
+    # plot 
+  p <- afex_plot(mdl, 
+          x = 'LISAS_var', 
+          trace = 'train_type', 
+          panel = 'switch',
+          error = "none", 
+          data_plot = F) + 
+  theme_pubclean()
+  
+  # compute contrasts
+  c <- do.call(rbind, lapply(list_of_contrast_lists, function(x) summary(contrast(emm_int, x, adjust='bonferroni'))))
+  
+  # put result in data frame
+  dt <- data.table(c)
+  dt[, names(.SD) := lapply(.SD, round, 2), .SDcols=c('estimate', 'SE', 'df', 't.ratio')
+  ][, names(.SD) := lapply(.SD, round, 3), .SDcols=c('p.value')]
+
+  # return output
+  return(list(means=emm_int, plot=p, contrasts=c, dt=dt)) #made this return some additional information for interpreting the results
+}
+```
+
+Run analysis.
+
+```{r}
+# assign variable label
+var <- 'LISAS_all_cor_mean'
+
+# compute contrasts
+res <- get_all_contrasts(var, list_of_contrast_lists)
+
+# show results
+res$contrasts
+res$plot
+
+# save result
+fln <- str_glue("res/contrasts_exp-{exp}_ses-{ses}_{var}.csv")
+write_csv(res$dt, fln)
+```
+
+## Training session
 
 Define contrasts for analysis
 
 ```{r}
-# look at effect of sub_ses at each level of train_type
-first_vs_last <- list(stable = c(-1, 0, 1, 0),
-                      variable = c(0, -1, 0, 1))
-# look at effect of train_type at each level of sub_ses
-stable_vs_variable <- list(first = c(1, -1, 0, 0),
-                           last = c(0, 0, 1, -1))
-# interaction effect
-interaction <- list(interaction = c(0.5, -0.5, -0.5, 0.5))
+#| output: false
 
-# combine
-list_of_contrast_lists <- list(interaction,
-                               first_vs_last, 
-                               stable_vs_variable)
+# assign session label
+ses <- 'train'
+
+## define contrasts for analysis
+first_vs_last_at_stable <- c(1, 0, -1, 0)
+first_vs_last_at_variable <- c(0, 1, 0, -1)
+stable_vs_variable_at_first <- c(1, -1, 0, 0)
+stable_vs_variable_at_last <- c(0, 0, 1, -1)
+interaction <- c(0.5, -0.5, -0.5, 0.5)
+
+# now we have our key contrasts, we can check if they are orthogonal.
+n_contrasts <- 5
+all_contrasts <- matrix(c(first_vs_last_at_stable, 
+                          first_vs_last_at_variable, 
+                          stable_vs_variable_at_first, 
+                          stable_vs_variable_at_last, 
+                          interaction), 
+                        byrow=FALSE, 
+                        ncol=n_contrasts)
+G <- t(all_contrasts) %*% all_contrasts
+G # look at G: can't separate them, all need to be in 1 big family
+
+fam_test <- list(first_vs_last_at_stable = first_vs_last_at_stable, # 1
+                 first_vs_last_at_variable = first_vs_last_at_variable, # 2
+                 stable_vs_variable_at_first = stable_vs_variable_at_first, # 3
+                 stable_vs_variable_at_last = stable_vs_variable_at_last, # 4
+                 interaction = interaction) # 5
+
+list_of_contrast_lists <- list(fam_test)
 ```
 
 Edit the contrast function.
